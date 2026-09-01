@@ -1,5 +1,13 @@
 # Telemetry
 
+> **Fork notice (2026-09-01).** Telemetry is **disabled at source** in this
+> fork. `sendBatch` (`src/telemetry/send.ts`) is a no-op that discards the
+> queued events without opening a network connection, the npm `postinstall`
+> hook and the publish-time key-stamping script are deleted, and `BAKED_KEY`
+> is empty. Nothing described below is ever transmitted from a build of this
+> fork. The rest of this document is kept as upstream's contract for
+> reference. See `FORK_HARDENING.md` for the full list of changes.
+
 graft collects a small set of **anonymous** usage events so we can tell whether
 the thing works: how many repos get past a build, whether an agent reaches for
 graft or falls back to grep, which commands earn their place, and what breaks in

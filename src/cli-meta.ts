@@ -47,22 +47,17 @@ export interface NpmViewResult {
   version?: string;
 }
 
-/** `npm view <pkg> version`, offline-safe: any failure (no npm, no network,
- * timeout) resolves to `{ ok: false }` rather than throwing. */
+/**
+ * FORK HARDENING (2026-09-01): upstream this ran `npm view <pkg> version` — a
+ * registry request. In this fork no version check ever touches the network, so
+ * it always reports `{ ok: false }` ("latest: unreachable"). An explicit
+ * `graft upgrade` still runs `npm install -g` because the user asked for it.
+ * See FORK_HARDENING.md.
+ */
 export function getNpmViewVersion(pkgName: string = PKG_NAME, timeoutMs = 2000): NpmViewResult {
-  try {
-    const res = spawnSync("npm", ["view", pkgName, "version"], {
-      encoding: "utf8",
-      timeout: timeoutMs,
-      windowsHide: true,
-    });
-    if (res.error || res.signal || res.status !== 0) return { ok: false };
-    const version = res.stdout?.trim();
-    if (!version) return { ok: false };
-    return { ok: true, version };
-  } catch {
-    return { ok: false };
-  }
+  void pkgName;
+  void timeoutMs;
+  return { ok: false };
 }
 
 /** Pure formatter for `graft version` — no I/O, easy to unit-test. */

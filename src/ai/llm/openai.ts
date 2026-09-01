@@ -1,12 +1,12 @@
 /**
  * OpenAI-compatible transport. Wraps the `openai` SDK pointed at any
- * OpenAI-compatible endpoint (OpenAI, OpenRouter, Fireworks, a LiteLLM proxy,
- * Groq, Together, DeepSeek, a local server, …) — the user picks the endpoint
+ * OpenAI-compatible endpoint (OpenAI, a LiteLLM proxy,
+ * a local server, …) — the user picks the endpoint
  * with `baseUrl` and authenticates with their own key.
  *
  * This adapter reproduces graft's historical wire behavior exactly: temperature
  * is forwarded, cache breakpoints become `cache_control` content parts (which
- * OpenRouter forwards to Anthropic), and cached tokens are subtracted out of the
+ * some gateways forward to Anthropic), and cached tokens are subtracted out of the
  * input count so {@link Usage.input} is uncached-only.
  */
 import OpenAI from "openai";
@@ -23,7 +23,7 @@ export interface OpenAIChatModelOptions {
   baseUrl?: string;
   /** Stable manifest label; defaults to `openai:<model>`. */
   label?: string;
-  /** Extra default headers (e.g. OpenRouter's `X-Title`). */
+  /** Extra default headers (rarely needed). */
   headers?: Record<string, string>;
   /** Inject a pre-built client (tests pass a stub; production omits it). */
   client?: OpenAI;
@@ -32,7 +32,7 @@ export interface OpenAIChatModelOptions {
 type ChatParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
 type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
-/** A text content part, optionally carrying a cache breakpoint (OpenRouter passthrough). */
+/** A text content part, optionally carrying a cache breakpoint (gateway passthrough). */
 function textPart(text: string, cache: boolean | undefined) {
   return cache
     ? [{ type: "text" as const, text, cache_control: { type: "ephemeral" as const } }]
