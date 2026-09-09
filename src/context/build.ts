@@ -66,7 +66,7 @@ export interface BuildOptions {
    * Same prefix semantics as the wiring walk. When omitted, falls back to the
    * whitelist recorded in the graph fingerprint (mirrors `checkGraph`). */
   onlyDirs?: string[];
-  /** Human label for the model, recorded in the manifest (e.g. "openrouter:openai/gpt-4o-mini"). */
+  /** Human label for the model, recorded in the manifest (e.g. "anthropic:claude-sonnet-5"). */
   model: string;
   summarizer: Summarizer;
   synthesizer: Synthesizer;

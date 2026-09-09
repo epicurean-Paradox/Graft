@@ -25,14 +25,12 @@
  *   • Cursor/Codex  — MCP server boot (src/mcp/server.ts), and any CLI command
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readJson, writeJsonAtomic, cacheDir } from './util/state.js';
 import { HOSTS } from './hosts/registry.js';
 import { START } from './hosts/sections.js';
-import { getNpmViewVersion, readCurrentVersion } from './cli-meta.js';
-import { graftCliPath } from './claude/paths.js';
+import { readCurrentVersion } from './cli-meta.js';
 
 /**
  * The version of the graft package this code was loaded from.
@@ -98,19 +96,15 @@ export function readUpdateCache(home?: string): UpdateCache | null {
   return readJson<UpdateCache>(updateCachePath(home));
 }
 
-function writeUpdateCache(cache: UpdateCache, home?: string): void {
-  try { writeJsonAtomic(updateCachePath(home), cache); } catch { /* unwritable home — skip */ }
-}
-
 /**
- * The `graft _update-check` command body: hit the registry, store the answer.
- * Runs in a detached child so nothing user-facing ever waits on the network.
+ * FORK HARDENING (2026-09-01): upstream this was the `graft _update-check`
+ * command body — an npm registry fetch in a detached child. In this fork it
+ * never touches the registry and never writes: no unsolicited update check
+ * runs at all. See FORK_HARDENING.md.
  */
 export function refreshUpdateCache(home?: string, now = Date.now()): UpdateCache {
-  const res = getNpmViewVersion();
-  const cache: UpdateCache = { latest: res.ok ? (res.version ?? null) : null, checkedAt: now };
-  writeUpdateCache(cache, home);
-  return cache;
+  void home;
+  return { latest: null, checkedAt: now };
 }
 
 /** True when the cached answer is missing or older than the TTL. */
@@ -119,28 +113,15 @@ export function needsRefresh(cache: UpdateCache | null, now = Date.now()): boole
 }
 
 /**
- * Kick off a background registry check if the cache has gone stale. Touches
- * `checkedAt` first so concurrent callers (and a child that dies) don't spawn a
- * fetch per invocation. Never waits, never throws.
- *
- * Only called from long-lived or already-slow contexts (a CLI command, MCP
- * boot) — never from a hook, which reads the cache and nothing else.
+ * FORK HARDENING (2026-09-01): upstream this spawned a detached `graft
+ * _update-check` child to refresh the cached registry answer. In this fork it
+ * is a no-op — nothing is spawned and nothing is fetched. Kept exported so any
+ * remaining caller compiles unchanged. See FORK_HARDENING.md.
  */
 export function maybeRefreshInBackground(home?: string, now = Date.now()): boolean {
-  const cache = readUpdateCache(home);
-  if (!needsRefresh(cache, now)) return false;
-  writeUpdateCache({ latest: cache?.latest ?? null, checkedAt: now }, home);
-  try {
-    const child = spawn(process.execPath, [graftCliPath(), '_update-check'], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
-    return true;
-  } catch {
-    return false; // no spawn (sandbox, ENOMEM) — the nudge just uses the old cache
-  }
+  void home;
+  void now;
+  return false;
 }
 
 /** One line, or nothing. Nothing is the common case — don't spend context on

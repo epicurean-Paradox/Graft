@@ -122,18 +122,19 @@ export class Graft {
   private chatModel(): ChatModel {
     if (this.cfg.chatModel) return this.cfg.chatModel;
     if (this._chatModel) return this._chatModel;
-    if (!this.cfg.apiKey) {
+    // Fail-closed gate, moved from apiKey to region rather than dropped: Bedrock
+    // takes credentials from the AWS chain, so the region is now the one value
+    // that decides whether -- and where -- source code egresses.
+    if (!this.cfg.region) {
       throw new Error(
-        "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
-          "for your provider) to build or summarize the graph.",
+        "No AWS region. Set AWS_REGION (and GRAFT_MODEL for a non-default model) to " +
+          "build or summarize the graph. This fork sends model calls only to AWS Bedrock.",
       );
     }
     this._chatModel = createChatModel({
       provider: this.cfg.provider,
-      apiKey: this.cfg.apiKey,
       model: this.cfg.model,
-      baseUrl: this.cfg.baseUrl,
-      headers: this.cfg.headers,
+      region: this.cfg.region,
     });
     return this._chatModel;
   }

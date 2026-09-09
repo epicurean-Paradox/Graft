@@ -8,27 +8,26 @@ import type { ProviderKind } from "./llm/factory.js";
  * User-facing configuration. Anything omitted falls back to environment
  * variables and then to sensible defaults.
  *
- * graft is vendor-neutral: `provider` names only the WIRE FORMAT, not a company.
- * `openai` speaks the OpenAI-compatible API — point `baseUrl` at OpenRouter,
- * Fireworks, a LiteLLM proxy, Groq, a local server, or OpenAI itself, and pass
- * your own key. `anthropic` speaks the native Messages API. Any LLM-backed
- * operation needs an API key.
+ * FORK HARDENING (2026-09-09): Bedrock is the only provider, so there is no
+ * API key and no base URL to configure -- credentials come from the AWS chain and
+ * the only egress-selecting value is the region, which is REQUIRED rather than
+ * defaulted. `apiKey`/`baseUrl` are gone from the config surface; keeping them as
+ * ignored fields would read as configurable and silently do nothing.
+ * See FORK_HARDENING.md.
  */
 export interface EngineConfig {
   /** Where the graph lives. Env: GRAFT_DIR. Default: `<repo>/.context`. */
   contextDir?: string;
 
-  /** Wire format / SDK. Env: GRAFT_PROVIDER. Default: `openai`. */
+  /** Provider. Env: GRAFT_PROVIDER. Only `bedrock` is supported. */
   provider?: ProviderKind;
-  /** API key for the chosen provider. Env: GRAFT_API_KEY (legacy: OPENROUTER_API_KEY). */
-  apiKey?: string;
-  /** Model id. Env: GRAFT_MODEL. Provider-specific default. */
+  /** Model id. Env: GRAFT_MODEL. Short form only (see reference_bedrock_chat_config). */
   model?: string;
-  /** Base URL for OpenAI-compatible endpoints. Env: GRAFT_BASE_URL. */
-  baseUrl?: string;
+  /** AWS region for Bedrock. Env: AWS_REGION. No default -- egress must be explicit. */
+  region?: string;
 
   // --- advanced: bring your own components ---
-  /** Override the whole transport (skips provider/apiKey/baseUrl). */
+  /** Override the whole transport (skips provider/model/region). */
   chatModel?: ChatModel;
   /** Override the synthesizer. */
   synthesizer?: Synthesizer;
@@ -42,73 +41,55 @@ export interface EngineConfig {
 export interface ResolvedConfig {
   contextDir?: string;
   provider: ProviderKind;
-  apiKey?: string;
   model: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  /** True when the key came from the deprecated OPENROUTER_* fallback. */
-  usedLegacyEnv: boolean;
+  region?: string;
   chatModel?: ChatModel;
   synthesizer?: Synthesizer;
   summarizer?: Summarizer;
   cruxSummarizer?: CruxSummarizer;
 }
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const ORCAROUTER_BASE_URL = "https://api.orcarouter.ai/v1";
-
-/** Per-provider default model. */
+/**
+ * Per-provider default model. Short id only: a Bedrock ARN or a long id fails to
+ * resolve, and a cross-region call needs an inference profile rather than a
+ * foundation-model id (memory `reference_bedrock_chat_config`).
+ */
 export const DEFAULT_MODELS: Record<ProviderKind, string> = {
-  openai: "openai/gpt-4o-mini",
-  anthropic: "claude-sonnet-5",
-  // Provider-prefixed so the LiteLLM proxy routes it; override with GRAFT_MODEL.
-  litellm: "openai/gpt-4o-mini",
-  // Provider-prefixed so the OrcaRouter gateway routes it; override with GRAFT_MODEL.
-  orcarouter: "openai/gpt-4o-mini",
+  bedrock: "eu.anthropic.claude-sonnet-5",
 };
 
 export const DEFAULTS = {
-  provider: "openai" as ProviderKind,
-  model: DEFAULT_MODELS.openai,
+  provider: "bedrock" as ProviderKind,
+  model: DEFAULT_MODELS.bedrock,
 } as const;
 
-/** Merge user config with environment variables and defaults. */
+/**
+ * Merge user config with environment variables and defaults.
+ *
+ * FORK HARDENING (2026-09-09): an unsupported `GRAFT_PROVIDER` is a hard error,
+ * never a silent fall-through to the default. Upstream read the env var straight
+ * into a cast, so a typo (or a stale `GRAFT_PROVIDER=openai` in someone's shell)
+ * would have been carried into the factory rather than rejected.
+ */
 export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
   const env = process.env;
-  const provider = config.provider ?? (env.GRAFT_PROVIDER as ProviderKind | undefined) ?? DEFAULTS.provider;
-
-  const explicitKey = config.apiKey ?? env.GRAFT_API_KEY;
-  const legacyKey = env.OPENROUTER_API_KEY;
-  const apiKey = explicitKey ?? legacyKey ?? env.ORCAROUTER_API_KEY;
-  const usedLegacyEnv = !explicitKey && !!legacyKey;
-
-  const model =
-    config.model ??
-    env.GRAFT_MODEL ??
-    env.GRAFT_OPENROUTER_MODEL ??
-    env.ORCAROUTER_MODEL ??
-    DEFAULT_MODELS[provider];
-
-  let baseUrl = config.baseUrl ?? env.GRAFT_BASE_URL ?? env.OPENROUTER_BASE_URL ?? env.ORCAROUTER_BASE_URL;
-  // Back-compat: an existing setup with only OPENROUTER_API_KEY keeps hitting
-  // OpenRouter without any config change.
-  if (!baseUrl && provider === "openai" && usedLegacyEnv) baseUrl = OPENROUTER_BASE_URL;
-  // The orcarouter provider points at the gateway unless a base URL is given.
-  if (!baseUrl && provider === "orcarouter") baseUrl = ORCAROUTER_BASE_URL;
-
-  const headers =
-    provider === "openai" && baseUrl?.includes("openrouter.ai")
-      ? { "X-Title": "graft" }
-      : undefined;
+  const requested = config.provider ?? env.GRAFT_PROVIDER ?? DEFAULTS.provider;
+  if (requested !== "bedrock") {
+    throw new Error(
+      `Unsupported provider "${String(requested)}". This fork routes all model calls ` +
+        "through AWS Bedrock (claude-code-mastery ADR 0001 section 2); the direct-vendor " +
+        "adapters are deleted, not disabled.",
+    );
+  }
+  const provider: ProviderKind = "bedrock";
+  const model = config.model ?? env.GRAFT_MODEL ?? DEFAULT_MODELS[provider];
+  const region = config.region ?? env.AWS_REGION;
 
   return {
     contextDir: config.contextDir ?? env.GRAFT_DIR,
     provider,
-    apiKey,
     model,
-    baseUrl,
-    headers,
-    usedLegacyEnv,
+    region,
     chatModel: config.chatModel,
     synthesizer: config.synthesizer,
     summarizer: config.summarizer,

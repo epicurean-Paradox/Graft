@@ -41,7 +41,7 @@ import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurren
 import { patchBuildConfig, type BuildConfig } from "./util/state.js";
 import { normalizePathPrefix } from "./util/paths.js";
 import { latestSession, formatSessionStats } from "./claude/session-metrics.js";
-import { formatUpdateNudge, maybeRefreshInBackground, readUpdateCache, refreshUpdateCache, writeStamp } from "./upkeep.js";
+import { writeStamp } from "./upkeep.js";
 import {
   errorCode,
   filesBucket,
@@ -91,17 +91,15 @@ program
   .description("Build a repo's context graph as linked markdown, and keep it in sync with the code.")
   .version(currentVersion, "-v, --version")
   .option("--dir <path>", "context graph directory (default: <repo>/graft)")
-  .option("--provider <name>", "LLM wire format: openai | anthropic | litellm | orcarouter (env GRAFT_PROVIDER)")
-  .option("--model <id>", "model id for the LLM pass (env GRAFT_MODEL)")
-  .option("--api-key <key>", "provider API key (env GRAFT_API_KEY)")
-  .option("--base-url <url>", "OpenAI-compatible endpoint URL (env GRAFT_BASE_URL)");
+  .option("--provider <name>", "model provider: bedrock (env GRAFT_PROVIDER)")
+  .option("--model <id>", "Bedrock model or inference-profile id, short form (env GRAFT_MODEL)")
+  .option("--region <name>", "AWS region for Bedrock (env AWS_REGION)");
 
 interface GlobalOpts {
   dir?: string;
   provider?: string;
   model?: string;
-  apiKey?: string;
-  baseUrl?: string;
+  region?: string;
 }
 
 /** Config drawn from the global CLI flags (env + defaults fill the rest). */
@@ -111,8 +109,7 @@ function cliConfig(): EngineConfig {
     contextDir: o.dir,
     provider: o.provider as ProviderKind | undefined,
     model: o.model,
-    apiKey: o.apiKey,
-    baseUrl: o.baseUrl,
+    region: o.region,
   };
 }
 
@@ -195,25 +192,18 @@ function parseTabs(raw: string | undefined): VizTab[] | undefined {
 }
 
 /**
- * Commands that own the upgrade story themselves (`version`, `upgrade`) or must
- * not editorialize on stderr at startup (`mcp` runs its own upkeep at boot, and
- * `_update-check` IS the fetch).
+ * Commands that must not editorialize on stderr at startup (`version` and
+ * `upgrade` own their own reporting; `mcp` keeps stdout/stderr protocol-clean).
+ *
+ * FORK HARDENING (2026-09-01): upstream, the preAction hook also kicked off a
+ * background npm registry check and printed an upgrade nudge. Both are removed
+ * in this fork — no unsolicited update check ever runs. Telemetry recording
+ * below is queue-local only; the send path is a no-op (see src/telemetry/send.ts).
  */
-const UPKEEP_SKIP = new Set(["version", "upgrade", "_update-check", "mcp"]);
+const UPKEEP_SKIP = new Set(["version", "upgrade", "mcp"]);
 
-/**
- * Every other command: top up the cached registry answer in the background and,
- * if a newer graft is out, say so once on stderr. This is what makes the CLI the
- * cache filler for the hooks, which are not allowed to touch the network.
- */
 program.hook("preAction", (_parent, action) => {
   if (UPKEEP_SKIP.has(action.name())) return;
-  maybeRefreshInBackground();
-  const nudge = formatUpdateNudge(currentVersion, readUpdateCache()?.latest);
-  if (nudge) console.error(nudge);
-  // Telemetry, in the order a user should experience it: disclose first, then
-  // record, then (at most once a day, detached) send. Every step is a no-op in a
-  // fork, in CI, under DO_NOT_TRACK, or after `graft telemetry disable`.
   const notice = firstRunNotice();
   if (notice) console.error(notice);
   trackFirstRunIfNew();
@@ -232,16 +222,9 @@ program.hook("postAction", (_parent, action) => {
   track("query", { command: name, surface: "cli", hit: queryNote.hit }, { repo: queryNote.repo });
 });
 
-// Hidden from --help: only ever spawned detached by maybeRefreshInBackground.
-program
-  .command("_update-check", { hidden: true })
-  .description("internal: refresh the cached latest-version answer")
-  .action(() => {
-    refreshUpdateCache();
-  });
-
-// Hidden for the same reason as _update-check: only ever spawned detached, by
-// maybeFlushInBackground. Running it by hand is harmless — it drains the queue.
+// Hidden from --help: only ever spawned detached, by maybeFlushInBackground.
+// Running it by hand is harmless — it drains the queue (the send is a no-op in
+// this fork; see src/telemetry/send.ts).
 program
   .command("_telemetry-flush", { hidden: true })
   .description("internal: POST the queued anonymous usage events")
@@ -425,20 +408,16 @@ program
         .map(([k, n]) => `${n} ${k}`)
         .join(", ");
 
-    // --deep needs a key; without one, degrade to the $0 structural build.
+    // --deep needs a Bedrock region; without one, degrade to the $0 structural build.
     let deep = opts.deep;
     const resolved = resolveConfig(cliConfig());
-    if (deep && !resolved.apiKey) {
+    if (deep && !resolved.region) {
       deep = false;
       console.error(
-        "⚠ no API key set — falling back to the structural build (no LLM summaries).\n" +
-          "  Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL for your\n" +
-          "  provider) and re-run `graft build --deep` to add concept nodes and summaries.",
-      );
-    }
-    if (deep && resolved.usedLegacyEnv) {
-      console.error(
-        "⚠ using OPENROUTER_API_KEY (deprecated) — prefer GRAFT_API_KEY + GRAFT_BASE_URL.",
+        "⚠ no AWS region set — falling back to the structural build (no LLM summaries).\n" +
+          "  Set AWS_REGION (and GRAFT_MODEL for a non-default model) and re-run\n" +
+          "  `graft build --deep` to add concept nodes and summaries. Note that --deep\n" +
+          "  sends raw file source to Bedrock: a deliberate per-run egress decision.",
       );
     }
 
@@ -804,7 +783,7 @@ program
   .option("--base <ref>", "diff against this ref's merge base with HEAD (e.g. origin/main); default: the working tree vs HEAD")
   .option("-d, --depth <n>", 'hops to walk over incoming edges, or "all" for the full closure (default 2)')
   .option("--format <fmt>", "text (default) | markdown | mermaid | json")
-  .option("--name", "name the affected areas with one cached LLM call (needs GRAFT_API_KEY); without it, areas are named after their hub symbol")
+  .option("--name", "name the affected areas with one cached LLM call (needs AWS_REGION); without it, areas are named after their hub symbol")
   .option("--export-viz <dir>", "also write the interactive page for this radius (one self-contained index.html — for CI, GitHub Pages, or an artifact)")
   .option("--title <text>", "subtitle beside the repo name on the exported page (e.g. \"PR #171\")")
   .option("--no-owners", "do not suggest who to tag (by default, git history names the people behind each affected area)")
@@ -1052,8 +1031,7 @@ function wireTarget(
 
     // Converge, don't just add. init writes the selected hosts; without this it
     // never touches the rest, so a repo wired by an older version (or by the same
-    // version with different --agents) keeps that run's files forever — and
-    // `reconcileWiring` then keeps them *up to date*, which is worse than stale.
+    // version with different --agents) keeps that run's files forever.
     // Retract every host NOT being written now; `exclude` spares the ones about to
     // be rewritten, and the graph cache is kept (init is one step from using it).
     const retracted = changed(
