@@ -57,7 +57,7 @@ explicit operator configuration.
   "latest: unreachable" instead of querying the registry. An explicit
   `graft upgrade` still runs `npm install -g` because the user asked for it.
 
-## 4. Anthropic-only egress by default
+## 4. Anthropic-only egress by default (SUPERSEDED 2026-09-09 by section 4b)
 
 - `src/ai/providers.ts`: removed the `OPENROUTER_API_KEY` and
   `ORCAROUTER_API_KEY` key fallbacks, the `GRAFT_OPENROUTER_MODEL` /
@@ -79,6 +79,87 @@ explicit operator configuration.
 - Comment-level mentions of third-party gateways in `src/` were scrubbed so a
   source grep is clean; historical mentions remain in `CHANGELOG.md`, `docs/`,
   and upstream's README.
+
+## 4b. Bedrock-only egress (2026-09-09) — supersedes section 4
+
+Section 4 pinned `GRAFT_PROVIDER=anthropic`, i.e. the direct Anthropic endpoint.
+**One day later, claude-code-mastery ADR 0001 section 2 (operator ruling
+2026-09-02) ruled that all model and embedding provisioning routes through AWS
+Bedrock, with no direct vendor calls.** Section 4 therefore contradicted the
+governing ADR from the day after it was written, and stayed dormant only because
+ADR 0001 Amendment A1 admits this fork as a deterministic L1 writer in `plain
+build` mode with **no LLM pass at all**. Merging this branch to `main` without
+fixing it would have encoded the contradiction into the default branch, where the
+next `build --deep` would find it.
+
+- **`src/ai/llm/bedrock.ts` is the single model egress path.** Claude on Bedrock
+  speaks the same Messages API, so the mapping the `anthropic` adapter held moved
+  here verbatim (system hoisting, tool-result coalescing, forced-tool json mode,
+  `providerRaw` replay, no `temperature`).
+- **Deleted, not deselected:** `src/ai/llm/anthropic.ts`, `src/ai/llm/openai.ts`,
+  `src/ai/llm/litellm.ts`, and the `openai` + `@anthropic-ai/sdk` **declared**
+  dependencies. Section 4 kept `openai` declared on the reasoning that "no silent
+  selection path reaches them" — a declared SDK beside a deleted adapter is still
+  one import from live, which is the OrcaRouter failure mode this fork was opened by.
+- **Stated rather than glossed:** `@anthropic-ai/sdk` remains INSTALLED
+  transitively, because `@anthropic-ai/bedrock-sdk` depends on it — the Bedrock
+  client extends the vendor base client and re-points it at a Bedrock endpoint with
+  SigV4. That is the vendor's architecture, not a leak: no code here declares or
+  imports it, so no path constructs a direct-endpoint client. The pin is named
+  `direct_vendor_sdks_are_not_declared_dependencies` for exactly that reason — it
+  checks `package.json`, not `node_modules`, and its name must not claim more.
+- **Supply-chain cost, recorded because it is the real trade-off:** the lockfile
+  grows from **101 to 247 packages** (+146: `@aws-sdk/*`, `@smithy/*`,
+  `@aws-crypto/*`). Deleting the LLM path outright would have added zero. This was
+  an explicit operator decision (2026-09-09) in favour of keeping `--deep` reachable
+  under ADR 0001 section 2 rather than removing the capability.
+- **`ProviderKind` has one member (`bedrock`).** An unsupported `GRAFT_PROVIDER`
+  (including a stale `openai` in someone's shell) is now a **hard error**, where
+  upstream cast the env var straight through to the factory.
+- **The fail-closed gate moved, it was not dropped.** `apiKey` is gone from the
+  config surface — Bedrock takes credentials from the AWS chain — so `AWS_REGION`
+  is now the value that gates the LLM path, in `engine.ts`, `cli.ts` (`--deep`
+  degrades to the $0 structural build without it) and `blast/name.ts`. The adapter
+  itself refuses to construct without a region: the region decides *where* source
+  code is transmitted, and that is never inferred.
+- **Default model** `eu.anthropic.claude-sonnet-5` — short id, never an ARN; a
+  cross-region call needs an inference profile rather than a foundation-model id.
+
+**NOT ARMED.** This is a code path, not a live capability. Every Bedrock
+precondition recorded for the sibling coppermind fork is unmet here: no scoped IAM
+role, no named profile, no budget alarm, no verified model-id resolution. And
+`build --deep` still ships raw file source to the model, so it remains a deliberate
+per-run egress decision — forbidden outright over employer source without its own
+ruling.
+
+### Red-first pins (`test/bedrock-only-egress.test.ts`)
+
+Nine pins, each failing on this branch's own 2026-09-01 state. Mutations applied,
+suite re-run, the named pin observed failing:
+
+| Mutation | Pin that goes red |
+|---|---|
+| restore `src/ai/llm/anthropic.ts` | adapters-stay-deleted + `no_direct_vendor_sdk_imports` |
+| re-add `openai` to `ProviderKind` | `provider_kind_is_bedrock_only` |
+| accept any `GRAFT_PROVIDER` | `unsupported_provider_is_rejected` |
+| default the region to `us-east-1` | `region_is_required` |
+| re-add the `openai` dependency | `no_direct_vendor_dependencies` |
+
+`test/llm-adapters.test.ts`: the OpenAI half is deleted with its subject; the
+Anthropic half is **converted** to Bedrock rather than dropped, because those five
+mapping behaviours are exactly the logic that moved into `bedrock.ts`.
+
+### Verification (2026-09-09)
+
+- `tsc -p tsconfig.json` and `tsc -p viewer/tsconfig.json` both clean.
+- `grep -rE "api\.anthropic\.com|api\.openai\.com|openrouter" src/` — zero hits
+  (the endpoint-host pin greps all of `src/`; prose was reworded rather than the pin
+  exempted).
+- `npm test`: **464 pass / 106 fail**, against a pre-change baseline of **466 / 106**.
+  Every one of the 106 is `No native build was found for platform=darwin` —
+  tree-sitter native modules unbuilt because the fork installs with
+  `--ignore-scripts`. Pre-existing and environmental; **zero failures introduced**.
+  The net −2 passing is the deleted OpenAI/litellm adapter tests.
 
 ## Verification (2026-09-01)
 

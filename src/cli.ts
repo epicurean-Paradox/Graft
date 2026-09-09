@@ -91,17 +91,15 @@ program
   .description("Build a repo's context graph as linked markdown, and keep it in sync with the code.")
   .version(currentVersion, "-v, --version")
   .option("--dir <path>", "context graph directory (default: <repo>/graft)")
-  .option("--provider <name>", "LLM wire format: anthropic | openai | litellm (env GRAFT_PROVIDER)")
-  .option("--model <id>", "model id for the LLM pass (env GRAFT_MODEL)")
-  .option("--api-key <key>", "provider API key (env GRAFT_API_KEY)")
-  .option("--base-url <url>", "OpenAI-compatible endpoint URL (env GRAFT_BASE_URL)");
+  .option("--provider <name>", "model provider: bedrock (env GRAFT_PROVIDER)")
+  .option("--model <id>", "Bedrock model or inference-profile id, short form (env GRAFT_MODEL)")
+  .option("--region <name>", "AWS region for Bedrock (env AWS_REGION)");
 
 interface GlobalOpts {
   dir?: string;
   provider?: string;
   model?: string;
-  apiKey?: string;
-  baseUrl?: string;
+  region?: string;
 }
 
 /** Config drawn from the global CLI flags (env + defaults fill the rest). */
@@ -111,8 +109,7 @@ function cliConfig(): EngineConfig {
     contextDir: o.dir,
     provider: o.provider as ProviderKind | undefined,
     model: o.model,
-    apiKey: o.apiKey,
-    baseUrl: o.baseUrl,
+    region: o.region,
   };
 }
 
@@ -411,15 +408,16 @@ program
         .map(([k, n]) => `${n} ${k}`)
         .join(", ");
 
-    // --deep needs a key; without one, degrade to the $0 structural build.
+    // --deep needs a Bedrock region; without one, degrade to the $0 structural build.
     let deep = opts.deep;
     const resolved = resolveConfig(cliConfig());
-    if (deep && !resolved.apiKey) {
+    if (deep && !resolved.region) {
       deep = false;
       console.error(
-        "⚠ no API key set — falling back to the structural build (no LLM summaries).\n" +
-          "  Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL for your\n" +
-          "  provider) and re-run `graft build --deep` to add concept nodes and summaries.",
+        "⚠ no AWS region set — falling back to the structural build (no LLM summaries).\n" +
+          "  Set AWS_REGION (and GRAFT_MODEL for a non-default model) and re-run\n" +
+          "  `graft build --deep` to add concept nodes and summaries. Note that --deep\n" +
+          "  sends raw file source to Bedrock: a deliberate per-run egress decision.",
       );
     }
 
@@ -785,7 +783,7 @@ program
   .option("--base <ref>", "diff against this ref's merge base with HEAD (e.g. origin/main); default: the working tree vs HEAD")
   .option("-d, --depth <n>", 'hops to walk over incoming edges, or "all" for the full closure (default 2)')
   .option("--format <fmt>", "text (default) | markdown | mermaid | json")
-  .option("--name", "name the affected areas with one cached LLM call (needs GRAFT_API_KEY); without it, areas are named after their hub symbol")
+  .option("--name", "name the affected areas with one cached LLM call (needs AWS_REGION); without it, areas are named after their hub symbol")
   .option("--export-viz <dir>", "also write the interactive page for this radius (one self-contained index.html — for CI, GitHub Pages, or an artifact)")
   .option("--title <text>", "subtitle beside the repo name on the exported page (e.g. \"PR #171\")")
   .option("--no-owners", "do not suggest who to tag (by default, git history names the people behind each affected area)")

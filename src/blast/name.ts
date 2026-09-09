@@ -282,16 +282,15 @@ export async function nameReport(
   let namer: Namer | undefined;
   if (cfg.chatModel) {
     namer = new ChatNamer(cfg.chatModel);
-  } else if (cfg.apiKey) {
+  } else if (cfg.region) {
     const { createChatModel } = await import("../ai/llm/factory.js");
     namer = new ChatNamer(createChatModel({
-      provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model,
-      baseUrl: cfg.baseUrl, headers: cfg.headers,
+      provider: cfg.provider, model: cfg.model, region: cfg.region,
     }));
   }
 
   const stats = await applyNames(graph, report, { namer, contextDir });
-  if (!namer) return { stats, note: "no API key (GRAFT_API_KEY), so areas keep their symbol names" };
+  if (!namer) return { stats, note: "no AWS region (AWS_REGION), so areas keep their symbol names" };
   if (stats.error) return { stats, note: `naming failed (${stats.error}) — areas keep their symbol names` };
   if (stats.named + stats.cached + stats.declined > 0) {
     const bits = [`${stats.named} named`, `${stats.cached} cached`];
