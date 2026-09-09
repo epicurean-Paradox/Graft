@@ -23,7 +23,8 @@
  * Merging the hardening to the default branch would have encoded that contradiction
  * where the next `--deep` run would find it, so the direct-vendor adapters are
  * DELETED rather than deselected — a disabled path is one env var from live, which
- * is the exact OrcaRouter failure mode this fork's own audit was opened by.
+ * is the exact silent-gateway-fallback failure mode this fork's own audit was
+ * opened by (see FORK_HARDENING.md section 4).
  *
  * NOT ARMED. This is the code path, not a live capability. It refuses to construct
  * without an explicit region, and `graft build --deep` over any repository remains
